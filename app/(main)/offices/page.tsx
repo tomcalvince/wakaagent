@@ -68,28 +68,50 @@ export default function OfficesPage() {
   const [isFormDrawerOpen, setIsFormDrawerOpen] = React.useState(false)
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = React.useState(false)
   const [selectedOffice, setSelectedOffice] = React.useState<AgentOffice | null>(null)
+  const isRefreshingRef = React.useRef(false)
+  const isFormDrawerOpenRef = React.useRef(false)
 
-  const loadOffices = React.useCallback(async () => {
+  // Keep ref in sync with state
+  React.useEffect(() => {
+    isFormDrawerOpenRef.current = isFormDrawerOpen
+  }, [isFormDrawerOpen])
+
+  // Stable token update callback
+  const handleTokenUpdate = React.useCallback(
+    async (newAccessToken: string, newRefreshToken: string) => {
+      await updateSession({
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+      })
+    },
+    [updateSession]
+  )
+
+  const loadOffices = React.useCallback(async (skipLoadingState = false, force = false) => {
     if (!session?.accessToken || !session?.refreshToken) {
-      setIsLoading(false)
+      if (!skipLoadingState) setIsLoading(false)
       return
     }
 
-    setIsLoading(true)
+    // Don't reload if already refreshing, unless forced
+    if (!force && isRefreshingRef.current) {
+      return
+    }
+
+    if (!skipLoadingState) {
+      setIsLoading(true)
+    }
+    isRefreshingRef.current = true
     setError(null)
     try {
       const data = await fetchAgentOffices({
         accessToken: session.accessToken,
         refreshToken: session.refreshToken,
-        onTokenUpdate: async (newAccessToken, newRefreshToken) => {
-          await updateSession({
-            accessToken: newAccessToken,
-            refreshToken: newRefreshToken,
-          })
-        },
+        onTokenUpdate: handleTokenUpdate,
       })
 
-      setOffices(data)
+      // Ensure data is always an array
+      setOffices(Array.isArray(data) ? data : [])
     } catch (err) {
       console.error("Failed to fetch offices:", err)
       if (err instanceof Error && err.message.includes("Token refresh failed")) {
@@ -100,13 +122,25 @@ export default function OfficesPage() {
       }
       setError("Failed to load offices. Please try again.")
     } finally {
-      setIsLoading(false)
+      if (!skipLoadingState) {
+        setIsLoading(false)
+      }
+      isRefreshingRef.current = false
     }
-  }, [session?.accessToken, session?.refreshToken, updateSession, router])
+  }, [session?.accessToken, session?.refreshToken, handleTokenUpdate, router])
+
+  // Store loadOffices in a ref to avoid dependency issues
+  const loadOfficesRef = React.useRef(loadOffices)
+  React.useEffect(() => {
+    loadOfficesRef.current = loadOffices
+  }, [loadOffices])
 
   React.useEffect(() => {
-    loadOffices()
-  }, [loadOffices])
+    // Only load on initial mount or when session tokens change, and drawer is not open
+    if (session?.accessToken && session?.refreshToken && !isFormDrawerOpenRef.current) {
+      loadOfficesRef.current()
+    }
+  }, [session?.accessToken, session?.refreshToken])
 
   const handleCreateOffice = () => {
     setSelectedOffice(null)
@@ -123,17 +157,23 @@ export default function OfficesPage() {
     setIsDeleteDialogOpen(true)
   }
 
-  const handleFormSuccess = () => {
+  const handleFormSuccess = React.useCallback(() => {
     setIsFormDrawerOpen(false)
     setSelectedOffice(null)
-    loadOffices()
-  }
+    // Delay the reload to allow drawer to close smoothly, and force reload even if drawer state hasn't updated yet
+    setTimeout(() => {
+      loadOffices(true, true) // Skip loading state and force reload
+    }, 300)
+  }, [loadOffices])
 
-  const handleDeleteSuccess = () => {
+  const handleDeleteSuccess = React.useCallback(() => {
     setIsDeleteDialogOpen(false)
     setSelectedOffice(null)
-    loadOffices()
-  }
+    // Delay the reload to allow dialog to close smoothly, and force reload
+    setTimeout(() => {
+      loadOffices(true, true) // Skip loading state and force reload
+    }, 300)
+  }, [loadOffices])
 
   if (isLoading) {
     return (
@@ -169,7 +209,7 @@ export default function OfficesPage() {
           </Card>
         )}
 
-        {offices.length === 0 && !error ? (
+        {!error && Array.isArray(offices) && offices.length === 0 ? (
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -186,7 +226,7 @@ export default function OfficesPage() {
             </Button>
           </Empty>
         ) : (
-          offices.map((office) => (
+          Array.isArray(offices) && offices.map((office) => (
             <Card key={office.id} className="rounded-2xl p-4 space-y-4">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
@@ -262,12 +302,7 @@ export default function OfficesPage() {
         onSuccess={handleFormSuccess}
         accessToken={session?.accessToken || ""}
         refreshToken={session?.refreshToken || ""}
-        onTokenUpdate={async (newAccessToken, newRefreshToken) => {
-          await updateSession({
-            accessToken: newAccessToken,
-            refreshToken: newRefreshToken,
-          })
-        }}
+        onTokenUpdate={handleTokenUpdate}
       />
 
       {/* Delete Dialog */}
@@ -279,12 +314,7 @@ export default function OfficesPage() {
           onSuccess={handleDeleteSuccess}
           accessToken={session?.accessToken || ""}
           refreshToken={session?.refreshToken || ""}
-          onTokenUpdate={async (newAccessToken, newRefreshToken) => {
-            await updateSession({
-              accessToken: newAccessToken,
-              refreshToken: newRefreshToken,
-            })
-          }}
+          onTokenUpdate={handleTokenUpdate}
         />
       )}
     </div>

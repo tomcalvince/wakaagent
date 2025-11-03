@@ -24,6 +24,7 @@ import { geocodeLocation, type GeocodeResult } from "@/lib/services/locations"
 import { formatPhoneNumber } from "@/lib/utils/phone"
 import { getUserLocation, getCountryFromCoordinates } from "@/lib/utils/location"
 import { cn } from "@/lib/utils"
+import { LocationPinMap } from "./location-pin-map"
 
 const DAYS_OF_WEEK = [
   { key: "monday", label: "Monday" },
@@ -72,6 +73,8 @@ export function OfficeFormDrawer({
   const [geocodeResults, setGeocodeResults] = React.useState<GeocodeResult[]>([])
   const [isSearching, setIsSearching] = React.useState(false)
   const [selectedGeocodeResult, setSelectedGeocodeResult] = React.useState<GeocodeResult | null>(null)
+  const [showMap, setShowMap] = React.useState(false)
+  const [mapCenter, setMapCenter] = React.useState<[number, number]>([-1.2921, 36.8219]) // Default: Nairobi
   const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
 
   // Initialize form when drawer opens or office changes
@@ -80,6 +83,8 @@ export function OfficeFormDrawer({
       if (office) {
         // Edit mode - populate with existing office data
         setOfficeName(office.office_name || "")
+        const lat = parseFloat(office.latitude || "0")
+        const lng = parseFloat(office.longitude || "0")
         setLatitude(office.latitude || "")
         setLongitude(office.longitude || "")
         setAddress(office.address || "")
@@ -89,6 +94,12 @@ export function OfficeFormDrawer({
         setPhone(office.phone || "")
         setEmail(office.email || "")
         setOpeningHours(office.opening_hours || {})
+        // Set map center if we have coordinates
+        if (lat !== 0 && lng !== 0) {
+          setMapCenter([lat, lng])
+          setShowMap(true)
+        }
+        setSelectedGeocodeResult(null)
       } else {
         // Create mode - reset form and get location
         setOfficeName("")
@@ -109,6 +120,8 @@ export function OfficeFormDrawer({
           saturday: "09:00-14:00",
           sunday: "closed",
         })
+        setShowMap(false)
+        setSelectedGeocodeResult(null)
 
         // Try to get user location for defaults
         setIsLoadingLocation(true)
@@ -188,8 +201,14 @@ export function OfficeFormDrawer({
 
   const handleSelectGeocodeResult = (result: GeocodeResult) => {
     setSelectedGeocodeResult(result)
-    setLatitude(result.latitude.toString())
-    setLongitude(result.longitude.toString())
+    const lat = result.latitude
+    const lng = result.longitude
+    setLatitude(lat.toString())
+    setLongitude(lng.toString())
+    
+    // Update map center and show map
+    setMapCenter([lat, lng])
+    setShowMap(true)
     
     // Build address from result
     const addressParts: string[] = []
@@ -222,6 +241,28 @@ export function OfficeFormDrawer({
     setLocationSearch("")
   }
 
+  // Handle location change from map
+  const handleMapLocationChange = (lat: number, lng: number) => {
+    setLatitude(lat.toString())
+    setLongitude(lng.toString())
+    setMapCenter([lat, lng])
+  }
+
+  // Sync map center when coordinates are manually edited (but not from map interaction)
+  React.useEffect(() => {
+    const latNum = parseFloat(latitude)
+    const lngNum = parseFloat(longitude)
+    if (!isNaN(latNum) && !isNaN(lngNum) && showMap) {
+      // Only update if the coordinates actually changed (avoid infinite loop)
+      // Small epsilon check to handle floating point comparisons
+      const epsilon = 0.000001
+      if (Math.abs(mapCenter[0] - latNum) > epsilon || Math.abs(mapCenter[1] - lngNum) > epsilon) {
+        setMapCenter([latNum, lngNum])
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latitude, longitude, showMap])
+
   const handleOpeningHourChange = (day: string, value: string) => {
     setOpeningHours((prev) => ({
       ...prev,
@@ -250,6 +291,11 @@ export function OfficeFormDrawer({
       toast.error("Invalid latitude or longitude")
       return
     }
+
+    // Round coordinates to 6 decimal places (approximately 0.1 meter precision)
+    // This ensures we stay within the 9-digit limit for the API
+    const roundedLat = Math.round(latNum * 1000000) / 1000000
+    const roundedLng = Math.round(lngNum * 1000000) / 1000000
 
     if (!address.trim()) {
       toast.error("Address is required")
@@ -288,32 +334,42 @@ export function OfficeFormDrawer({
     try {
       const formattedPhone = formatPhoneNumber(phone, country === "KE" ? "+254" : "+256")
 
-      const payload = {
-        office_name: officeName.trim(),
-        latitude: latNum,
-        longitude: lngNum,
-        address: address.trim(),
-        city: city.trim(),
-        county: county.trim(),
-        country: country.trim(),
-        phone: formattedPhone,
-        email: email.trim(),
-        opening_hours: openingHours,
-        accessToken,
-        refreshToken,
-        onTokenUpdate,
-      }
-
       if (office) {
         // Update existing office
         await updateAgentOffice({
           officeId: office.id,
-          ...payload,
+          office_name: officeName.trim(),
+          latitude: roundedLat,
+          longitude: roundedLng,
+          address: address.trim(),
+          city: city.trim(),
+          county: county.trim(),
+          country: country.trim(),
+          phone: formattedPhone,
+          email: email.trim(),
+          opening_hours: openingHours,
+          accessToken,
+          refreshToken,
+          onTokenUpdate,
         })
         toast.success("Office updated successfully!")
       } else {
         // Create new office
-        await createAgentOffice(payload)
+        await createAgentOffice({
+          office_name: officeName.trim(),
+          latitude: roundedLat,
+          longitude: roundedLng,
+          address: address.trim(),
+          city: city.trim(),
+          county: county.trim(),
+          country: country.trim(),
+          phone: formattedPhone,
+          email: email.trim(),
+          opening_hours: openingHours,
+          accessToken,
+          refreshToken,
+          onTokenUpdate,
+        })
         toast.success("Office created successfully!")
       }
 
@@ -430,6 +486,22 @@ export function OfficeFormDrawer({
               </div>
             )}
           </div>
+
+          {/* Map for location pinning */}
+          {showMap && latitude && longitude && !isNaN(parseFloat(latitude)) && !isNaN(parseFloat(longitude)) && (
+            <div className="space-y-2">
+              <Label>Pin exact location on map</Label>
+              <p className="text-sm text-muted-foreground">
+                Click on the map or drag the red pin to set the exact coordinates
+              </p>
+              <LocationPinMap
+                center={mapCenter}
+                onLocationChange={handleMapLocationChange}
+                height={300}
+                zoom={15}
+              />
+            </div>
+          )}
 
           {/* Latitude and Longitude (editable after selection, or can be entered manually) */}
           <div className="grid grid-cols-2 gap-4">

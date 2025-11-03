@@ -40,6 +40,12 @@ export interface SearchAgentOfficesParams {
   onTokenUpdate: (accessToken: string, refreshToken: string) => Promise<void>
 }
 
+export interface AgentOfficesResponse {
+  count: number
+  message: string
+  offices: AgentOffice[]
+}
+
 /**
  * Fetches the authenticated user's own agent offices
  * @param params - Parameters including tokens and token update callback
@@ -97,13 +103,19 @@ export async function fetchAgentOffices(
       return []
     }
 
-    const data: AgentOffice[] = await response.json()
+    const responseData: AgentOfficesResponse = await response.json()
+
+    // Extract offices array from response
+    const offices = responseData?.offices || []
 
     if (process.env.NODE_ENV !== "production") {
-      console.log("[agent-offices.fetchAgentOffices] success", { count: data?.length ?? 0 })
+      console.log("[agent-offices.fetchAgentOffices] success", { 
+        count: responseData?.count ?? 0,
+        officesCount: offices.length 
+      })
     }
 
-    return data || []
+    return Array.isArray(offices) ? offices : []
   } catch (error) {
     if (process.env.NODE_ENV !== "production") {
       console.error("[agent-offices.fetchAgentOffices] exception", error)

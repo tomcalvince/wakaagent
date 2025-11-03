@@ -50,10 +50,20 @@ export function LoginForm({
       }
 
       // Success - redirect to dashboard or callback URL
-      const callbackUrl = searchParams.get("callbackUrl") || "/dashboard"
+      let callbackUrl = searchParams.get("callbackUrl") || "/dashboard"
+      
+      // Validate callback URL - ensure it's a valid app route
+      // Don't allow redirecting to static files or invalid routes
+      const invalidPaths = ["/api/", "/_next/", "/login", "/"]
+      if (invalidPaths.some((path) => callbackUrl.startsWith(path))) {
+        callbackUrl = "/dashboard"
+      }
+      
       toast.success("Login successful!")
-      router.push(callbackUrl)
-      router.refresh()
+      
+      // Don't set isLoading to false - let the redirect happen
+      // Use window.location for a hard redirect that ensures session is loaded
+      window.location.href = callbackUrl
     } catch (error) {
       // Error from login service (includes validation errors)
       const errorMessage = error instanceof Error ? error.message : "An unexpected error occurred during login."

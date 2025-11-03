@@ -20,6 +20,17 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
+  // Allow public static files and assets
+  const publicStaticFiles = [
+    "/icons/",
+    "/assets/",
+    "/placeholder.svg",
+  ]
+  
+  if (publicStaticFiles.some((file) => pathname.startsWith(file))) {
+    return NextResponse.next()
+  }
+
   // Allow public routes
   if (isPublicRoute(pathname)) {
     return NextResponse.next()
@@ -34,7 +45,14 @@ export default async function proxy(request: NextRequest) {
   // If no token and trying to access protected route, redirect to login
   if (!token) {
     const loginUrl = new URL("/login", request.url)
-    loginUrl.searchParams.set("callbackUrl", pathname)
+    // Only set callbackUrl if it's a valid app route (not static files)
+    if (
+      !pathname.includes(".") && // No file extensions
+      pathname !== "/" && // Not root (already redirects to login)
+      !publicStaticFiles.some((file) => pathname.startsWith(file))
+    ) {
+      loginUrl.searchParams.set("callbackUrl", pathname)
+    }
     return NextResponse.redirect(loginUrl)
   }
 

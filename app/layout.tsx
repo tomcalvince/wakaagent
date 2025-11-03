@@ -3,7 +3,7 @@ import localFont from "next/font/local";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { SessionProvider } from "@/components/providers/session-provider";
-import { PWARegister } from "@/components/pwa-register";
+import { UnregisterServiceWorker } from "@/components/unregister-sw";
 
 const satoshi = localFont({
   src: [
@@ -65,12 +65,6 @@ const satoshi = localFont({
 export const metadata: Metadata = {
   title: "Waka Agent",
   description: "waka agent web app",
-  manifest: "/manifest.json",
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: "default",
-    title: "Waka Agent",
-  },
   icons: {
     icon: [
       { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
@@ -98,14 +92,13 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <link rel="manifest" href="/manifest.json" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
         <meta name="theme-color" content="#7CB342" />
       </head>
       <body
         className={`${satoshi.variable} font-sans antialiased`}
       >
-        <PWARegister />
+        <UnregisterServiceWorker />
         <SessionProvider>
           {children}
         </SessionProvider>
