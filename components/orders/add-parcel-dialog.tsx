@@ -15,7 +15,31 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import { searchAgentOfficesByLocation, type AgentOffice } from "@/lib/services/agent-offices"
 import { formatPhoneNumber } from "@/lib/utils/phone"
-import { CheckIcon } from "@heroicons/react/24/outline"
+import { CheckIcon, ChevronDownIcon } from "@heroicons/react/24/outline"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { useUserPreferences } from "@/lib/stores/user-preferences"
+
+interface Parcel {
+  id: string
+  description: string
+  parcel_name: string
+  value: string
+  cod: boolean
+  amount: string
+  size: string
+  recipientName: string
+  recipientPhone: string
+  specialNotes: string
+  deliveryDestination: string
+  destination_agent_office: string
+  destination_office_name?: string
+}
 
 interface AddParcelDialogProps {
   open: boolean
@@ -32,6 +56,7 @@ interface AddParcelDialogProps {
     deliveryDestination: string
     destination_agent_office: string
   }) => void
+  editingParcel?: Parcel
   countryCode: string
   accessToken: string
   refreshToken: string
@@ -45,15 +70,22 @@ const SIZES = [
   { value: "xlarge", label: "X-Large", weight: "> 15 kg" },
 ]
 
+const COUNTRIES: Array<{ code: "+256" | "+254"; flag: string; name: string }> = [
+  { code: "+256", flag: "🇺🇬", name: "Uganda" },
+  { code: "+254", flag: "🇰🇪", name: "Kenya" },
+]
+
 export function AddParcelDialog({
   open,
   onOpenChange,
   onAddParcel,
+  editingParcel,
   countryCode,
   accessToken,
   refreshToken,
   onTokenUpdate,
 }: AddParcelDialogProps) {
+  const storedCountryCode = useUserPreferences((state) => state.countryCode)
   const [description, setDescription] = React.useState("")
   const [value, setValue] = React.useState("")
   const [cod, setCod] = React.useState(false)
@@ -66,14 +98,70 @@ export function AddParcelDialog({
   const [destinationOffices, setDestinationOffices] = React.useState<AgentOffice[]>([])
   const [selectedDestinationOffice, setSelectedDestinationOffice] = React.useState<string>("")
   const [isSearching, setIsSearching] = React.useState(false)
+  const [recipientCountryCode, setRecipientCountryCode] = React.useState<"+256" | "+254">("+254")
   const searchTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
+  const abortControllerRef = React.useRef<AbortController | null>(null)
+  const isMountedRef = React.useRef(true)
+
+  // Initialize recipient country code from store or prop
+  React.useEffect(() => {
+    const effectiveCountryCode = storedCountryCode || countryCode
+    setRecipientCountryCode(effectiveCountryCode === "UG" ? "+256" : "+254")
+  }, [storedCountryCode, countryCode])
+
+  // Populate form when editing parcel
+  React.useEffect(() => {
+    if (editingParcel && open) {
+      setDescription(editingParcel.description)
+      setValue(editingParcel.value)
+      setCod(editingParcel.cod)
+      setAmount(editingParcel.amount)
+      setSelectedSize(editingParcel.size)
+      setRecipientName(editingParcel.recipientName)
+      setSpecialNotes(editingParcel.specialNotes)
+      setDeliveryLocationSearch(editingParcel.deliveryDestination)
+      setSelectedDestinationOffice(editingParcel.destination_agent_office)
+      // Extract country code from phone if it starts with +256 or +254
+      let phoneNumber = editingParcel.recipientPhone
+      if (editingParcel.recipientPhone.startsWith("+256")) {
+        setRecipientCountryCode("+256")
+        phoneNumber = editingParcel.recipientPhone.replace("+256", "")
+      } else if (editingParcel.recipientPhone.startsWith("+254")) {
+        setRecipientCountryCode("+254")
+        phoneNumber = editingParcel.recipientPhone.replace("+254", "")
+      }
+      setRecipientPhone(phoneNumber)
+    } else if (!editingParcel && open) {
+      // Reset form when opening for new parcel
+      setDescription("")
+      setValue("")
+      setCod(false)
+      setAmount("")
+      setSelectedSize("")
+      setRecipientName("")
+      setRecipientPhone("")
+      setSpecialNotes("")
+      setDeliveryLocationSearch("")
+      setDestinationOffices([])
+      setSelectedDestinationOffice("")
+    }
+  }, [editingParcel, open])
 
   // Debounced search for destination offices
   React.useEffect(() => {
+    isMountedRef.current = true
+
     if (!deliveryLocationSearch.trim() || deliveryLocationSearch.length < 3) {
-      setDestinationOffices([])
-      setSelectedDestinationOffice("")
+      if (isMountedRef.current) {
+        setDestinationOffices([])
+        setSelectedDestinationOffice("")
+      }
       return
+    }
+
+    // Cancel previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
     }
 
     if (searchTimeoutRef.current) {
@@ -81,6 +169,11 @@ export function AddParcelDialog({
     }
 
     searchTimeoutRef.current = setTimeout(async () => {
+      if (!isMountedRef.current) return
+
+      // Create new abort controller for this request
+      abortControllerRef.current = new AbortController()
+
       setIsSearching(true)
       try {
         const offices = await searchAgentOfficesByLocation({
@@ -91,28 +184,50 @@ export function AddParcelDialog({
           refreshToken,
           onTokenUpdate,
         })
-        setDestinationOffices(offices)
-        // Auto-select first result if only one
-        if (offices.length === 1) {
-          setSelectedDestinationOffice(offices[0].id)
-        } else {
-          setSelectedDestinationOffice("")
+
+        // Only update state if component is still mounted and search hasn't changed
+        if (isMountedRef.current) {
+          setDestinationOffices(offices)
+          // Auto-select first result if only one
+          if (offices.length === 1) {
+            setSelectedDestinationOffice(offices[0].id)
+          } else {
+            setSelectedDestinationOffice("")
+          }
         }
       } catch (error) {
-        console.error("Failed to search offices:", error)
-        setDestinationOffices([])
-        setSelectedDestinationOffice("")
+        if (isMountedRef.current && !(error instanceof Error && error.name === "AbortError")) {
+          console.error("Failed to search offices:", error)
+          setDestinationOffices([])
+          setSelectedDestinationOffice("")
+        }
       } finally {
-        setIsSearching(false)
+        if (isMountedRef.current) {
+          setIsSearching(false)
+        }
       }
-    }, 500) // 500ms debounce
+    }, 800) // 800ms debounce
 
     return () => {
       if (searchTimeoutRef.current) {
         clearTimeout(searchTimeoutRef.current)
       }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+      isMountedRef.current = false
     }
   }, [deliveryLocationSearch, countryCode, accessToken, refreshToken, onTokenUpdate])
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+    }
+  }, [])
 
   const handleSubmit = () => {
     if (!description || !selectedSize || !recipientName || !recipientPhone) {
@@ -131,6 +246,9 @@ export function AddParcelDialog({
       return
     }
 
+    // Format phone number with country code before passing
+    const formattedRecipientPhone = formatPhoneNumber(recipientPhone, recipientCountryCode)
+
     onAddParcel({
       description,
       value,
@@ -138,24 +256,26 @@ export function AddParcelDialog({
       amount: cod ? amount : "",
       size: selectedSize,
       recipientName,
-      recipientPhone,
+      recipientPhone: formattedRecipientPhone,
       specialNotes,
       deliveryDestination: selectedOffice.office_name,
       destination_agent_office: selectedDestinationOffice,
     })
 
-    // Reset form
-    setDescription("")
-    setValue("")
-    setCod(false)
-    setAmount("")
-    setSelectedSize("")
-    setRecipientName("")
-    setRecipientPhone("")
-    setSpecialNotes("")
-    setDeliveryLocationSearch("")
-    setDestinationOffices([])
-    setSelectedDestinationOffice("")
+    // Reset form only if not editing
+    if (!editingParcel) {
+      setDescription("")
+      setValue("")
+      setCod(false)
+      setAmount("")
+      setSelectedSize("")
+      setRecipientName("")
+      setRecipientPhone("")
+      setSpecialNotes("")
+      setDeliveryLocationSearch("")
+      setDestinationOffices([])
+      setSelectedDestinationOffice("")
+    }
   }
 
   const handleClose = () => {
@@ -182,7 +302,9 @@ export function AddParcelDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto rounded-3xl">
         <DialogHeader>
-          <DialogTitle className="text-lg font-semibold">Add Parcel</DialogTitle>
+          <DialogTitle className="text-lg font-semibold">
+            {editingParcel ? "Edit Parcel" : "Add Parcel"}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
@@ -306,29 +428,33 @@ export function AddParcelDialog({
           {/* Recipient Phone */}
           <div className="space-y-2">
             <Label>Recipient Phone</Label>
-            <div className="relative flex items-center">
-              <div className="absolute left-3 flex items-center gap-2">
-                <span className="text-lg">🇺🇬</span>
-                <svg
-                  className="h-4 w-4 text-muted-foreground"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 9l-7 7-7-7"
-                  />
-                </svg>
+            <div className="relative">
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1 z-10 pointer-events-none">
+                <span className="text-lg">
+                  {COUNTRIES.find((c) => c.code === recipientCountryCode)?.flag}
+                </span>
               </div>
+              <Select
+                value={recipientCountryCode}
+                onValueChange={(value) => setRecipientCountryCode(value as "+256" | "+254")}
+              >
+                <SelectTrigger className="absolute left-8 top-1/2 -translate-y-1/2 w-6 h-6 p-0 border-0 bg-transparent hover:bg-transparent focus:ring-0 pointer-events-auto z-20">
+                  <ChevronDownIcon className="h-4 w-4 text-gray-500" />
+                </SelectTrigger>
+                <SelectContent>
+                  {COUNTRIES.map((country) => (
+                    <SelectItem key={country.code} value={country.code}>
+                      {country.flag} {country.name} {country.code}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Input
                 type="tel"
                 placeholder="phone number"
                 value={recipientPhone}
                 onChange={(e) => setRecipientPhone(e.target.value)}
-                className="pl-16 h-12 rounded-xl"
+                className="pl-14 h-12 rounded-xl"
               />
             </div>
           </div>
@@ -456,7 +582,7 @@ export function AddParcelDialog({
               disabled={!selectedDestinationOffice}
               className="w-full h-12 rounded-xl bg-green-600 text-background font-medium disabled:opacity-50"
             >
-              Add Parcel
+              {editingParcel ? "Update Parcel" : "Add Parcel"}
             </Button>
           </div>
         </div>

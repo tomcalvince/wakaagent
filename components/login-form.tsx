@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { login } from "@/lib/services/auth"
+import { getUserLocation, getCountryFromCoordinates } from "@/lib/utils/location"
+import { useUserPreferences } from "@/lib/stores/user-preferences"
 
 export function LoginForm({
   className,
@@ -24,6 +26,7 @@ export function LoginForm({
 }: React.ComponentProps<"div">) {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const setCountryCode = useUserPreferences((state) => state.setCountryCode)
   const [email, setEmail] = React.useState("")
   const [password, setPassword] = React.useState("")
   const [isLoading, setIsLoading] = React.useState(false)
@@ -60,6 +63,21 @@ export function LoginForm({
       }
       
       toast.success("Login successful!")
+      
+      // Request location permission and store country code
+      try {
+        const location = await getUserLocation()
+        const country = getCountryFromCoordinates(location.latitude, location.longitude)
+        if (country === "KE" || country === "UG") {
+          setCountryCode(country)
+        } else {
+          setCountryCode("KE") // Default to Kenya
+        }
+      } catch (locationError) {
+        console.warn("Failed to get user location:", locationError)
+        // Default to Kenya if location fails
+        setCountryCode("KE")
+      }
       
       // Don't set isLoading to false - let the redirect happen
       // Use window.location for a hard redirect that ensures session is loaded

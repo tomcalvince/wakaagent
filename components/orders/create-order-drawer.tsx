@@ -39,7 +39,8 @@ import {
   type ParcelPayload,
 } from "@/lib/services/orders"
 import { formatPhoneNumber } from "@/lib/utils/phone"
-import { getUserLocation, getCountryFromCoordinates } from "@/lib/utils/location"
+import { ChevronDownIcon } from "@heroicons/react/24/outline"
+import { useUserPreferences } from "@/lib/stores/user-preferences"
 
 interface Parcel extends ParcelPayload {
   id: string
@@ -65,6 +66,7 @@ interface CreateOrderDrawerProps {
 export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps) {
   const { data: session, update: updateSession } = useSession()
   const router = useRouter()
+  const countryCode = useUserPreferences((state) => state.countryCode)
   const [deliveryType, setDeliveryType] = React.useState<"dropoff" | "express">("dropoff")
   const [agentOffices, setAgentOffices] = React.useState<AgentOffice[]>([])
   const [selectedOriginOffice, setSelectedOriginOffice] = React.useState<string>("")
@@ -76,8 +78,19 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
   const [isParcelDialogOpen, setIsParcelDialogOpen] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(false)
   const [isSubmitting, setIsSubmitting] = React.useState(false)
-  const [countryCode, setCountryCode] = React.useState<string>("KE")
+  const [senderCountryCode, setSenderCountryCode] = React.useState<"+256" | "+254">("+254")
+  const [editingParcelId, setEditingParcelId] = React.useState<string | null>(null)
   const [showConfirmDialog, setShowConfirmDialog] = React.useState(false)
+
+  const COUNTRIES: Array<{ code: "+256" | "+254"; flag: string; name: string }> = [
+    { code: "+256", flag: "🇺🇬", name: "Uganda" },
+    { code: "+254", flag: "🇰🇪", name: "Kenya" },
+  ]
+
+  // Initialize sender country code based on stored country code
+  React.useEffect(() => {
+    setSenderCountryCode(countryCode === "UG" ? "+256" : "+254")
+  }, [countryCode])
 
   // Fetch agent offices and delivery windows on mount
   React.useEffect(() => {
@@ -89,18 +102,6 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
 
       setIsLoading(true)
       try {
-        // Request location permission and get country
-        try {
-          const location = await getUserLocation()
-          const country = getCountryFromCoordinates(location.latitude, location.longitude)
-          if (country) {
-            setCountryCode(country)
-          }
-        } catch (locationError) {
-          console.warn("Failed to get user location:", locationError)
-          // Continue with default country
-        }
-
         // Fetch agent offices
         const offices = await fetchAgentOffices({
           accessToken: currentSession.accessToken,
@@ -174,8 +175,8 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
       xlarge: 20,
     }
 
-    const newParcel: Parcel = {
-      id: Date.now().toString(),
+    const parcel: Parcel = {
+      id: editingParcelId || Date.now().toString(),
       description: parcelData.description,
       parcel_name: parcelData.description,
       value: parcelData.value,
@@ -194,8 +195,21 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
       recipient_phone: formatPhoneNumber(parcelData.recipientPhone),
       special_instructions: parcelData.specialNotes || undefined,
     }
-    setParcels([...parcels, newParcel])
+
+    if (editingParcelId) {
+      // Update existing parcel
+      setParcels(parcels.map((p) => (p.id === editingParcelId ? parcel : p)))
+      setEditingParcelId(null)
+    } else {
+      // Add new parcel
+      setParcels([...parcels, parcel])
+    }
     setIsParcelDialogOpen(false)
+  }
+
+  const handleEditParcel = (parcel: Parcel) => {
+    setEditingParcelId(parcel.id)
+    setIsParcelDialogOpen(true)
   }
 
   const handleRemoveParcel = (id: string) => {
@@ -253,7 +267,7 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
 
     try {
       // Format phone numbers
-      const formattedSenderPhone = formatPhoneNumber(senderPhone)
+      const formattedSenderPhone = formatPhoneNumber(senderPhone, senderCountryCode)
 
       // Map parcels to payload format
       const parcelPayloads: ParcelPayload[] = parcels.map((parcel) => ({
@@ -314,6 +328,7 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
     setSenderName("")
     setSenderPhone("")
     setParcels([])
+    setEditingParcelId(null)
   }
 
   const selectedOriginOfficeData = agentOffices.find((o) => o.id === selectedOriginOffice)
@@ -422,29 +437,33 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
                 {/* Sender Phone */}
                 <div className="space-y-2">
                   <Label>Sender Phone</Label>
-                  <div className="relative flex items-center">
-                    <div className="absolute left-3 flex items-center gap-2">
-                      <span className="text-lg">🇺🇬</span>
-                      <svg
-                        className="h-4 w-4 text-muted-foreground"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
+                  <div className="relative">
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 flex items-center gap-1 z-10 pointer-events-none">
+                      <span className="text-lg">
+                        {COUNTRIES.find((c) => c.code === senderCountryCode)?.flag}
+                      </span>
                     </div>
+                    <Select
+                      value={senderCountryCode}
+                      onValueChange={(value) => setSenderCountryCode(value as "+256" | "+254")}
+                    >
+                      <SelectTrigger className="absolute left-8 top-1/2 -translate-y-1/2 w-6 h-6 p-0 border-0 bg-transparent hover:bg-transparent focus:ring-0 pointer-events-auto z-20">
+                        <ChevronDownIcon className="h-4 w-4 text-gray-500" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {COUNTRIES.map((country) => (
+                          <SelectItem key={country.code} value={country.code}>
+                            {country.flag} {country.name} {country.code}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <Input
                       type="tel"
                       placeholder="phone number"
                       value={senderPhone}
                       onChange={(e) => setSenderPhone(e.target.value)}
-                      className="pl-16 h-12 rounded-xl bg-white border"
+                      className="pl-14 h-12 rounded-xl bg-white border"
                     />
                   </div>
                 </div>
@@ -462,14 +481,24 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
                           className="flex items-center justify-between p-3 rounded-xl border bg-background"
                         >
                           <span className="text-sm font-medium">{parcel.parcel_name}</span>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveParcel(parcel.id)}
-                            className="h-8 text-destructive"
-                          >
-                            Remove
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditParcel(parcel)}
+                              className="h-8"
+                            >
+                              Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRemoveParcel(parcel.id)}
+                              className="h-8 text-destructive"
+                            >
+                              Remove
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -504,8 +533,14 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
 
       <AddParcelDialog
         open={isParcelDialogOpen}
-        onOpenChange={setIsParcelDialogOpen}
+        onOpenChange={(open) => {
+          setIsParcelDialogOpen(open)
+          if (!open) {
+            setEditingParcelId(null)
+          }
+        }}
         onAddParcel={handleAddParcel}
+        editingParcel={editingParcelId ? parcels.find((p) => p.id === editingParcelId) : undefined}
         countryCode={countryCode}
         accessToken={session?.accessToken || ""}
         refreshToken={session?.refreshToken || ""}
