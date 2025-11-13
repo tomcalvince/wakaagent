@@ -60,12 +60,20 @@ export async function fetchWithAuth(
 ): Promise<Response> {
   // Make the initial request
   const makeRequest = (token: string) => {
+    // For FormData, don't set Content-Type - browser will set it with boundary
+    const isFormData = options.body instanceof FormData
+    const headers: HeadersInit = {
+      Authorization: `Bearer ${token}`,
+    }
+    
+    // Only add other headers if not FormData
+    if (!isFormData && options.headers) {
+      Object.assign(headers, options.headers)
+    }
+    
     return fetch(url, {
       ...options,
-      headers: {
-        ...options.headers,
-        Authorization: `Bearer ${token}`,
-      },
+      headers,
     })
   }
 

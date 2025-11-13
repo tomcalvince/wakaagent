@@ -20,6 +20,8 @@ export const API_URLS = {
   DELIVERY_WINDOWS: "/delivery-windows",
   MARK_ORDER_AS_PAID: "/orders", // Base path, order_id appended in service
   GEOCODE: "/locations/geocode",
+  USER_PROFILE: "/me",
+  PROFILE_IMAGE: "/profile/image",
 } as const
 
 /**

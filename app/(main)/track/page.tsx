@@ -105,13 +105,28 @@ function TrackingContent() {
               if (directions && directions.directions) {
                 // Extract route coordinates from directions
                 // API returns coordinates as [lng, lat], convert to [lat, lng] for Leaflet
-                const routeCoordinates: Array<[number, number]> = directions.directions.map(
-                  (step) => {
+                const routeCoordinates: Array<[number, number]> = directions.directions
+                  .map((step) => {
+                    // Validate step has coordinates
+                    if (!step.coordinates || !Array.isArray(step.coordinates) || step.coordinates.length !== 2) {
+                      return null
+                    }
+                    const [lng, lat] = step.coordinates
+                    // Validate coordinates are numbers
+                    if (typeof lat !== 'number' || typeof lng !== 'number') return null
+                    if (isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng)) return null
                     // step.coordinates is [lng, lat], convert to [lat, lng]
-                    return [step.coordinates[1], step.coordinates[0]]
-                  }
-                )
-                setRoute(routeCoordinates)
+                    return [lat, lng] as [number, number]
+                  })
+                  .filter((coord): coord is [number, number] => coord !== null)
+                
+                // Only set route if we have valid coordinates
+                if (routeCoordinates.length >= 2) {
+                  setRoute(routeCoordinates)
+                } else {
+                  console.warn("Invalid route coordinates, skipping route display")
+                  setRoute(undefined)
+                }
               }
             })
             .catch((err) => {

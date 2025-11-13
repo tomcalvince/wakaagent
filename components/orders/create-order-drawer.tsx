@@ -41,6 +41,9 @@ import {
 import { formatPhoneNumber } from "@/lib/utils/phone"
 import { ChevronDownIcon } from "@heroicons/react/24/outline"
 import { useUserPreferences } from "@/lib/stores/user-preferences"
+import { useOrderFormCache, isCacheValid } from "@/lib/stores/order-form-cache"
+
+const CACHE_EXPIRY_MS = 5 * 60 * 1000 // 5 minutes
 
 interface Parcel extends ParcelPayload {
   id: string
@@ -67,6 +70,14 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
   const { data: session, update: updateSession } = useSession()
   const router = useRouter()
   const countryCode = useUserPreferences((state) => state.countryCode)
+  const {
+    agentOffices: cachedOffices,
+    deliveryWindows: cachedWindows,
+    lastFetched,
+    setAgentOffices: setCachedOffices,
+    setDeliveryWindows: setCachedWindows,
+    isLoading: cacheLoading,
+  } = useOrderFormCache()
   const [deliveryType, setDeliveryType] = React.useState<"dropoff" | "express">("dropoff")
   const [agentOffices, setAgentOffices] = React.useState<AgentOffice[]>([])
   const [selectedOriginOffice, setSelectedOriginOffice] = React.useState<string>("")
@@ -92,68 +103,100 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
     setSenderCountryCode(countryCode === "UG" ? "+256" : "+254")
   }, [countryCode])
 
-  // Fetch agent offices and delivery windows on mount
+  // Refresh data in background
+  const refreshDataInBackground = React.useCallback(async () => {
+    if (!session?.accessToken || !session?.refreshToken) return
+
+    setIsLoading(true)
+    try {
+      // Fetch both in parallel
+      const [offices, windows] = await Promise.all([
+        fetchAgentOffices({
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          onTokenUpdate: async (newAccessToken, newRefreshToken) => {
+            await updateSession({
+              accessToken: newAccessToken,
+              refreshToken: newRefreshToken,
+            })
+          },
+        }),
+        fetchDeliveryWindows({
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          onTokenUpdate: async (newAccessToken, newRefreshToken) => {
+            await updateSession({
+              accessToken: newAccessToken,
+              refreshToken: newRefreshToken,
+            })
+          },
+        }),
+      ])
+
+      // Update cache
+      setCachedOffices(offices)
+      setCachedWindows(windows)
+
+      // Update local state
+      if (offices.length > 0) {
+        setAgentOffices(offices)
+        if (!selectedOriginOffice) {
+          setSelectedOriginOffice(offices[0].id)
+        }
+      }
+
+      const activeWindows = windows.filter((w) => w.is_active)
+      setDeliveryWindows(activeWindows)
+      if (activeWindows.length > 0 && !selectedDeliveryWindow) {
+        setSelectedDeliveryWindow(activeWindows[0].window_type)
+      }
+    } catch (error) {
+      console.error("Failed to load data:", error)
+      if (error instanceof Error && error.message.includes("Token refresh failed")) {
+        await signOut({ redirect: false })
+        router.push("/login")
+        router.refresh()
+        return
+      }
+      // Only show error if we don't have cached data
+      if (cachedOffices.length === 0 && cachedWindows.length === 0) {
+        toast.error("Failed to load form data. Please try again.")
+      }
+    } finally {
+      setIsLoading(false)
+    }
+  }, [session?.accessToken, session?.refreshToken, updateSession, router, selectedOriginOffice, selectedDeliveryWindow, cachedOffices, cachedWindows, setCachedOffices, setCachedWindows])
+
+  // Load cached data immediately when drawer opens
   React.useEffect(() => {
     if (!open || !session?.accessToken || !session?.refreshToken) return
 
-    async function loadData() {
-      const currentSession = session
-      if (!currentSession?.accessToken || !currentSession?.refreshToken) return
-
-      setIsLoading(true)
-      try {
-        // Fetch agent offices
-        const offices = await fetchAgentOffices({
-          accessToken: currentSession.accessToken,
-          refreshToken: currentSession.refreshToken,
-          onTokenUpdate: async (newAccessToken, newRefreshToken) => {
-            await updateSession({
-              accessToken: newAccessToken,
-              refreshToken: newRefreshToken,
-            })
-          },
-        })
-
-        if (offices.length > 0) {
-          setAgentOffices(offices)
-          // Preselect first office
-          setSelectedOriginOffice(offices[0].id)
-        }
-
-        // Fetch delivery windows
-        const windows = await fetchDeliveryWindows({
-          accessToken: currentSession.accessToken,
-          refreshToken: currentSession.refreshToken,
-          onTokenUpdate: async (newAccessToken, newRefreshToken) => {
-            await updateSession({
-              accessToken: newAccessToken,
-              refreshToken: newRefreshToken,
-            })
-          },
-        })
-
-        const activeWindows = windows.filter((w) => w.is_active)
-        setDeliveryWindows(activeWindows)
-        // Preselect first active window
-        if (activeWindows.length > 0) {
-          setSelectedDeliveryWindow(activeWindows[0].window_type)
-        }
-      } catch (error) {
-        console.error("Failed to load data:", error)
-        if (error instanceof Error && error.message.includes("Token refresh failed")) {
-          await signOut({ redirect: false })
-          router.push("/login")
-          router.refresh()
-          return
-        }
-        toast.error("Failed to load form data. Please try again.")
-      } finally {
-        setIsLoading(false)
+    const cacheValid = isCacheValid(lastFetched)
+    
+    // Use cached data if available and valid
+    if (cacheValid && cachedOffices.length > 0 && cachedWindows.length > 0) {
+      setAgentOffices(cachedOffices)
+      if (cachedOffices.length > 0 && !selectedOriginOffice) {
+        setSelectedOriginOffice(cachedOffices[0].id)
       }
-    }
 
-    loadData()
-  }, [open, session?.accessToken, session?.refreshToken, updateSession, router, session])
+      const activeWindows = cachedWindows.filter((w) => w.is_active)
+      setDeliveryWindows(activeWindows)
+      if (activeWindows.length > 0 && !selectedDeliveryWindow) {
+        setSelectedDeliveryWindow(activeWindows[0].window_type)
+      }
+      
+      // Refresh in background if cache is getting stale (within 1 minute of expiry)
+      const timeUntilExpiry = lastFetched ? CACHE_EXPIRY_MS - (Date.now() - lastFetched) : 0
+      if (timeUntilExpiry < 60 * 1000) {
+        // Refresh in background
+        refreshDataInBackground()
+      }
+    } else {
+      // No valid cache, fetch immediately
+      refreshDataInBackground()
+    }
+  }, [open, session?.accessToken, session?.refreshToken, lastFetched, cachedOffices, cachedWindows, selectedOriginOffice, selectedDeliveryWindow, refreshDataInBackground])
 
   const handleAddParcel = (parcelData: {
     description: string
@@ -349,7 +392,7 @@ export function CreateOrderDrawer({ open, onOpenChange }: CreateOrderDrawerProps
           </DrawerHeader>
 
           <div className="px-4 pb-6 overflow-y-auto flex-1 space-y-6">
-            {isLoading ? (
+            {isLoading && agentOffices.length === 0 && deliveryWindows.length === 0 ? (
               <div className="flex items-center justify-center py-12">
                 <p className="text-muted-foreground text-sm">Loading...</p>
               </div>

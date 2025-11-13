@@ -1,6 +1,7 @@
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarInset } from "@/components/ui/sidebar";
 import { Header, MobileNav } from "@/components/shared";
+import { OrderFormPreloader } from "@/components/providers/order-form-preloader";
 import React from "react";
 
 export default function MainLayout({
@@ -10,6 +11,7 @@ export default function MainLayout({
 }>) {
   return (
     <SidebarProvider>
+      <OrderFormPreloader />
       <AppSidebar />
       <SidebarInset className="flex flex-col h-screen overflow-hidden">
         <Header />
